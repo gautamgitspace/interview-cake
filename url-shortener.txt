@@ -1,0 +1,91 @@
+To create a new ShortLink, we'll send a POST request there. Our POST request will include one required argument: the destination where
+our ShortLink will point. It'll also optionally take a slug argument. If no slug is provided, we'll generate one. The response will
+contain the newly-created ShortLink, including its slug and destination.
+
+$ curl --data '{"destination": "interviewcake.com"}' https://ca.ke/api/v1/shortlink
+{
+"slug": "ae8uFt",
+"destination": "interviewcake.com"
+}
+
+PSEUDOCODE:
+
+def shortlink(request):
+    if request.method is not 'POST':
+        return Error501
+
+    destination = request.data.destination
+
+    # if they included a slug, use that
+    if request.data.slug:
+        slug = request.data.slug
+
+    # else, make them one
+    else:
+        slug = generate_new_random_slug()
+
+    DB.insert('Links', {'slug': slug, 'destination': destination})
+
+    response_body = {
+        'slug' : slug,
+        }
+
+    return Success200(json.format(response_body))
+
+The code for redirection endpoint:
+
+    def redirect(request):
+        destination = DB.get('Links', 'destination', {'slug': request.path})
+        return Redirect302(destination)
+
+how generate_new_random_slug() works? 26(Upper Case Alphabets) + 26(Lower Case Alphabets) + 10(digits) = 62. if 7 is the length of the slug, 62^7 ~ 5 trillion
+
+def generate_random_slug():
+  alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+  num_chars = 7
+  return ''.join([random.choice(alphabet) for char in num_chars])
+
+But how do we ensure slugs are unique? Two general strategies:
+
+1. "Re-roll" when we hit an already-used slug
+2. Adjust our slug generation strategy to only ever give us un-claimed slugs.
+2nd one is considerably better. How to do it? Using base conversion - base 62
+One potential issue: the current_random_slug_id could give us something that
+a user has already claimed as a user-generated slug. We'll need to check for that,
+and if it happens we'll just increment the current_random_slug_id and try again
+(and again, potentially, until we hit a "random" slug that hasn't been used yet).
+
+def generate_random_slug():
+  global current_id
+  while True:
+      slug = base_conversion(current_id, base_62_alphabet)
+      current_id += 1
+
+      # make sure that slug isn't already used
+      existing = db.get(slug)
+      if not existing:
+          return slug
+
+NEXT?
+Following a shortlink should be fast.
+The shortlink follower should be resilient to load spikes.
+
+The database read to get the destination for the given slug is
+certainly going to be our first bottleneck. In general, database
+operations usually bottleneck before business logic. What kind
+of DB should we use?
+
+NoSQL. Since we won't have any relational queries RDB is of no use.
+
+How else can we speed up database reads?
+We could put as much of the data in memory as possible, to avoid disc seeks.
+
+This becomes especially important when we start getting a heavy load of requests to a single link,
+like if one of our links is on the front page of Reddit. If we have the redirect URL right there in memory,
+we can process those redirects quickly.
+
+Depending on the database we use, it might already have an in-memory cache system (Oracle has one)
+To get more links in memory, we may be able to configure our database to use more space for its cache.
+Or we could use a memory caching system like memcached which is key-value based ditributed hash table that works
+on client server architecture. This can speed up responses as request won't go to slow DB or won't hit API every
+time. (talk about overall design that includes: client, dispatcher, memcached, worker pool and workers)
